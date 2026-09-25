@@ -26,6 +26,8 @@ class User(Base):
     username = Column(String(64), unique=True, nullable=False, index=True)
     password_hash = Column(String(256), nullable=False)
     display_name = Column(String(64), nullable=False, default="管理员")
+    # 凭据版本：重置密码时递增，使此前签发的 JWT 立即失效（持久化，重启后仍生效）
+    token_version = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 

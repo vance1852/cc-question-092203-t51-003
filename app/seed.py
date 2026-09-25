@@ -1,6 +1,8 @@
-"""首次启动时初始化数据库：建表 + 内置管理员 + 种子业务数据。"""
+"""首次启动时初始化数据库：建表 + 轻量迁移 + 内置管理员 + 种子业务数据。"""
+import logging
 from datetime import datetime, timedelta
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .auth import hash_password
@@ -8,10 +10,13 @@ from .config import DEFAULT_ADMIN_PASSWORD, DEFAULT_ADMIN_USERNAME
 from .database import Base, SessionLocal, engine
 from .models import Station, SwapRecord, User, Vehicle
 
+logger = logging.getLogger(__name__)
+
 
 def init_db() -> None:
     """创建所有表并灌入种子数据（幂等：已存在则跳过）。"""
     Base.metadata.create_all(bind=engine)
+    _ensure_schema()
     db: Session = SessionLocal()
     try:
         _seed_admin(db)
@@ -19,6 +24,17 @@ def init_db() -> None:
         db.commit()
     finally:
         db.close()
+
+
+def _ensure_schema() -> None:
+    """轻量迁移：为历史数据库补齐新增列（当前仅 users.token_version）。"""
+    with engine.begin() as conn:
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(users)"))}
+        if columns and "token_version" not in columns:
+            conn.execute(
+                text("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 1")
+            )
+            logger.info("已为 users 表补齐 token_version 列")
 
 
 def _seed_admin(db: Session) -> None:
@@ -31,6 +47,7 @@ def _seed_admin(db: Session) -> None:
             display_name="平台管理员",
         )
     )
+    logger.info("已创建内置管理员账号 %s（首次引导）", DEFAULT_ADMIN_USERNAME)
 
 
 def _seed_business(db: Session) -> None:

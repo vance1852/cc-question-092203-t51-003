@@ -6,12 +6,15 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from .config import validate_config
 from .routers import auth, dashboard, stations, swaps, vehicles
 from .seed import init_db
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 启动前先做配置安全检查：生产环境缺少强密钥或仍用默认凭据时直接拒绝启动
+    validate_config()
     # 启动时初始化数据库（建表 + 种子数据）
     init_db()
     yield
