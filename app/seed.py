@@ -1,12 +1,16 @@
 """首次启动时初始化数据库：建表 + 内置管理员 + 种子业务数据。"""
+import logging
 from datetime import datetime, timedelta
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .auth import hash_password
-from .config import DEFAULT_ADMIN_PASSWORD, DEFAULT_ADMIN_USERNAME
+from .config import DEV_ADMIN_PASSWORD, DEFAULT_ADMIN_PASSWORD, DEFAULT_ADMIN_USERNAME
 from .database import Base, SessionLocal, engine
 from .models import Station, SwapRecord, User, Vehicle
+
+logger = logging.getLogger("app.seed")
 
 
 def init_db() -> None:
@@ -14,6 +18,7 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     db: Session = SessionLocal()
     try:
+        _migrate_user_table(db)
         _seed_admin(db)
         _seed_business(db)
         db.commit()
@@ -21,7 +26,15 @@ def init_db() -> None:
         db.close()
 
 
+def _migrate_user_table(db: Session) -> None:
+    """轻量迁移：为老库的 users 表补齐 token_version 列。"""
+    columns = {row[1] for row in db.execute(text("PRAGMA table_info(users)"))}
+    if "token_version" not in columns:
+        db.execute(text("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0"))
+
+
 def _seed_admin(db: Session) -> None:
+    """首次引导管理员：仅当该用户不存在时创建，初始口令来自环境配置。"""
     if db.query(User).filter(User.username == DEFAULT_ADMIN_USERNAME).first():
         return
     db.add(
@@ -31,6 +44,13 @@ def _seed_admin(db: Session) -> None:
             display_name="平台管理员",
         )
     )
+    if DEFAULT_ADMIN_PASSWORD == DEV_ADMIN_PASSWORD:
+        logger.warning(
+            "已引导管理员账号 %s，初始密码为内置开发默认值，请尽快通过 /api/auth/change-password 修改",
+            DEFAULT_ADMIN_USERNAME,
+        )
+    else:
+        logger.info("已引导管理员账号 %s，初始密码来自环境变量 APP_ADMIN_PASSWORD", DEFAULT_ADMIN_USERNAME)
 
 
 def _seed_business(db: Session) -> None:

@@ -29,20 +29,27 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, stored: str) -> bool:
-    """校验明文密码与存储的哈希是否匹配。"""
+    """校验明文密码与存储的哈希是否匹配。
+
+    存储内容损坏（非 hex、缺少分隔符、编码异常等）时一律按不匹配处理，
+    绝不把解析异常抛给调用方。
+    """
     try:
         salt_hex, hash_hex = stored.split("$", 1)
-    except ValueError:
+        salt = bytes.fromhex(salt_hex)
+        expected = bytes.fromhex(hash_hex)
+    except (AttributeError, TypeError, ValueError):
         return False
-    salt = bytes.fromhex(salt_hex)
+    if not salt or not expected:
+        return False
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _PBKDF2_ROUNDS)
-    return hmac.compare_digest(digest.hex(), hash_hex)
+    return hmac.compare_digest(digest, expected)
 
 
-def create_access_token(subject: str) -> str:
-    """为给定用户名签发 JWT。"""
+def create_access_token(subject: str, token_version: int) -> str:
+    """为给定用户签发携带凭据版本的 JWT。"""
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    payload = {"sub": subject, "exp": expire}
+    payload = {"sub": subject, "ver": token_version, "exp": expire}
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
@@ -50,7 +57,11 @@ def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ) -> User:
-    """从 Bearer Token 解析并返回当前用户。"""
+    """从 Bearer Token 解析并返回当前用户。
+
+    令牌伪造、过期、编码异常或凭据版本过旧时统一返回 401，
+    不向调用方泄露内部解析细节。
+    """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="登录状态无效或已过期",
@@ -58,13 +69,17 @@ def get_current_user(
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username = payload.get("sub")
-        if not username:
-            raise credentials_exception
-    except jwt.PyJWTError:
+    except Exception:
+        # 畸形输入可能触发 PyJWTError 之外的解析异常，统一按无效令牌拒绝
+        raise credentials_exception
+    username = payload.get("sub")
+    token_version = payload.get("ver")
+    if not isinstance(username, str) or not username:
+        raise credentials_exception
+    if not isinstance(token_version, int) or isinstance(token_version, bool):
         raise credentials_exception
 
     user = db.query(User).filter(User.username == username).first()
-    if user is None:
+    if user is None or user.token_version != token_version:
         raise credentials_exception
     return user

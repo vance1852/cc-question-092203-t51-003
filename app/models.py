@@ -26,6 +26,8 @@ class User(Base):
     username = Column(String(64), unique=True, nullable=False, index=True)
     password_hash = Column(String(256), nullable=False)
     display_name = Column(String(64), nullable=False, default="管理员")
+    # 凭据版本：密码重置时 +1 并持久化，使此前签发的令牌立即失效
+    token_version = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
